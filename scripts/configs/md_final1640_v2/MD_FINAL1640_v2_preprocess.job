@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Build final-1640 folds from the final CSV, then preprocess to split.pkl.
+#
+# Submit:
+#   sbatch sbatch/MD_FINAL1640_v2_preprocess.job
+
+#SBATCH --job-name=MD_FINAL1640_v2_prep
+#SBATCH --partition=cpuXeon6458
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=12:00:00
+#SBATCH --output=sbatch/sbatch_log/MD_FINAL1640_V2/preprocess_%j.out
+#SBATCH --error=sbatch/sbatch_log/MD_FINAL1640_V2/preprocess_%j.err
+
+set -eo pipefail
+
+cd "$SLURM_SUBMIT_DIR"
+mkdir -p sbatch/sbatch_log/MD_FINAL1640_V2
+
+source "$HOME/anaconda3/etc/profile.d/conda.sh"
+conda activate unimacro
+
+ROOT="/share/home/202320162823/cmacro_BCDB"
+NEW_CSV="${ROOT}/paper_results/final_1640dataset.csv"
+OLD_WITH_FOLD="${ROOT}/data/processed/MD/MD_FINAL_1600/csv/with_fold.csv"
+OUTROOT="${ROOT}/data/processed/MD/MD_FINAL1640_V2"
+
+LABELS="density,Rg,D,S_q_peak,nematic_order,dielectric_constant,refractive_index"
+
+python -u frpn/pipelines/md_final1640_v2/preprocess/rebuild_final1640_with_fold.py \
+  --new_csv "${NEW_CSV}" \
+  --old_with_fold_csv "${OLD_WITH_FOLD}" \
+  --outroot "${OUTROOT}"
+
+python -u frpn/pipelines/md_final1640_v2/preprocess/preprocessing_polymer.py \
+  --task finetune \
+  --csv "${OUTROOT}/csv/with_fold.csv" \
+  --outroot "${ROOT}/data/processed/MD" \
+  --dataset-name "MD_FINAL1640_V2" \
+  --labels "${LABELS}" \
+  --workers 16 \
+  --kfold 5 \
+  --seed 42 \
+  --fold-source column \
+  --export-splits
+

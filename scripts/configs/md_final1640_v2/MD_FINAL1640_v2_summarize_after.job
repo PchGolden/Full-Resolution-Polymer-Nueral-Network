@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Summarize final-1640 results and merge OOF embeddings after training/export.
+#
+# Submit after the train and export jobs have finished.
+
+#SBATCH --job-name=MD_FINAL1640_v2_sum
+#SBATCH --partition=cpuXeon6458
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --time=04:00:00
+#SBATCH --output=sbatch/sbatch_log/MD_FINAL1640_V2/summary/summary_%j.out
+#SBATCH --error=sbatch/sbatch_log/MD_FINAL1640_V2/summary/summary_%j.err
+
+set -eo pipefail
+
+cd "$SLURM_SUBMIT_DIR"
+mkdir -p sbatch/sbatch_log/MD_FINAL1640_V2/summary
+
+source "$HOME/anaconda3/etc/profile.d/conda.sh"
+conda activate unimacro
+
+ROOT="/share/home/202320162823/cmacro_BCDB"
+RESULTS_ROOT="${ROOT}/results_MD_final1640_v2"
+PRED_DIR="${ROOT}/paper_results/MD_FINAL1640_v2/oof_predictions"
+EMB_DIR="${ROOT}/paper_results/MD_FINAL1640_v2/oof_embeddings"
+OUT_DIR="${ROOT}/paper_results/MD_FINAL1640_v2"
+PKL_PATH="${ROOT}/data/processed/MD/MD_FINAL1640_V2/main/split.pkl"
+
+MODELS="FRPN,FRPN_FP,Uni_Macro,Stage2_Only"
+LABELS="density,Rg,D,S_q_peak,nematic_order,dielectric_constant,refractive_index"
+
+echo "[MD-FINAL1640-SUM] waiting for density OOF files..."
+for model in FRPN FRPN_FP Uni_Macro Stage2_Only; do
+  while [[ ! -f "${PRED_DIR}/oof_${model}__density.csv" || ! -f "${EMB_DIR}/oof_emb_${model}__density.npz" ]]; do
+    echo "[MD-FINAL1640-SUM] missing density outputs for ${model}; sleeping 300s"
+    sleep 300
+  done
+done
+echo "[MD-FINAL1640-SUM] density OOF files found; running summary"
+
+python -u frpn/pipelines/md_final1640_v2/analysis/summarize_md_final1640_results.py \
+  --results_root "${RESULTS_ROOT}" \
+  --dataset_name "MD_FINAL1640_V2" \
+  --preds_dir "${PRED_DIR}" \
+  --embeds_dir "${EMB_DIR}" \
+  --out_dir "${OUT_DIR}" \
+  --pkl_path "${PKL_PATH}" \
+  --models "${MODELS}" \
+  --labels "${LABELS}"

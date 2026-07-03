@@ -1,0 +1,31 @@
+#!/bin/bash
+#SBATCH -J HOMO_PLOT_OOF
+#SBATCH -p gpuA800
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH -t 02:00:00
+#SBATCH -o sbatch/sbatch_log/HOMO_MDSTYLE/plots/%x_%j.out
+#SBATCH -e sbatch/sbatch_log/HOMO_MDSTYLE/plots/%x_%j.err
+
+set -eo pipefail
+
+mkdir -p sbatch/sbatch_log/HOMO_MDSTYLE/plots
+
+source "$HOME/anaconda3/etc/profile.d/conda.sh"
+conda activate unimacro
+
+export MPLBACKEND=Agg
+export PYTHONUNBUFFERED=1
+
+RESULTS_ROOT="results_homopolymer_mdstyle/HOMO_372"
+PKL_DIR="data/processed/HOMO_372/homopolymer/main"
+OUT_DIR="paper_results/homopolymer_oof_scatter_mdstyle"
+
+python -u frpn/pipelines/bcdb/analysis/plot_homopolymer_oof_scatter.py \
+  --results_root "${RESULTS_ROOT}" \
+  --pkl_dir "${PKL_DIR}" \
+  --out_dir "${OUT_DIR}" \
+  --batch_size 256 \
+  --device cuda \
+  --cache

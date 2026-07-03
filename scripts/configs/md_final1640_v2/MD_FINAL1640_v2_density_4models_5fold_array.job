@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# MD final-1640 density regression: 4 models x 5 folds = 20 tasks.
+#
+# Submit:
+#   sbatch sbatch/MD_FINAL1640_v2_density_4models_5fold_array.job
+
+#SBATCH --job-name=MD_FINAL1640_v2_den
+#SBATCH --partition=gpuA800
+#SBATCH --mem=60G
+#SBATCH --gres=gpu:1
+#SBATCH --time=2-00:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --output=sbatch/sbatch_log/MD_FINAL1640_V2/train_density/MD_FINAL1640_v2_density_%A_%a.out
+#SBATCH --error=sbatch/sbatch_log/MD_FINAL1640_V2/train_density/MD_FINAL1640_v2_density_%A_%a.err
+#SBATCH --array=0-19
+
+set -eo pipefail
+
+cd "$SLURM_SUBMIT_DIR"
+mkdir -p sbatch/sbatch_log/MD_FINAL1640_V2/train_density
+
+source "$HOME/anaconda3/etc/profile.d/conda.sh"
+conda activate unimacro
+
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
+ROOT="/share/home/202320162823/cmacro_BCDB"
+PKL="${ROOT}/data/processed/MD/MD_FINAL1640_V2/main/split.pkl"
+RESULTS_ROOT="${ROOT}/results_MD_final1640_v2"
+
+BSZ="${MD_BSZ:-24}"
+
+FOLDS=5
+LABELS=1
+MODELS=4
+TASKS=$(( MODELS * LABELS * FOLDS ))
+
+idx="${SLURM_ARRAY_TASK_ID}"
+if (( idx < 0 || idx >= TASKS )); then
+  echo "Invalid array idx=${idx} (expected 0..$((TASKS-1)))"
+  exit 2
+fi
+
+fold=$(( idx % FOLDS ))
+tmp=$(( idx / FOLDS ))
+label_id=$(( tmp % LABELS ))
+model_id=$(( tmp / LABELS ))
+
+LABEL_NAMES=(
+  density
+)
+label_name="${LABEL_NAMES[label_id]}"
+label_index=0
+
+main_task=""
+model_tag=""
+no_pretrained=0
+finetune_stage1_only=0
+chain_only_repr="smiles_embed"
+
+case "${model_id}" in
+  0)
+    model_tag="FRPN"
+    main_task="chain"
+    no_pretrained=1
+    ;;
+  1)
+    model_tag="FRPN_FP"
+    main_task="chain_only"
+    no_pretrained=1
+    chain_only_repr="fp_morgan2048"
+    ;;
+  2)
+    model_tag="Uni_Macro"
+    main_task="finetune"
+    no_pretrained=1
+    finetune_stage1_only=1
+    ;;
+  3)
+    model_tag="Stage2_Only"
+    main_task="chain_only"
+    no_pretrained=1
+    chain_only_repr="smiles_embed"
+    ;;
+  *)
+    echo "Invalid model_id=${model_id}"
+    exit 2
+    ;;
+esac
+
+dataset_name="MD_FINAL1640_V2/${model_tag}/label${label_index}_${label_name}"
+
+echo "[MD-FINAL1640-DENSITY] idx=${idx} fold=${fold} model=${model_tag} label=${label_name} label_index=${label_index} bsz=${BSZ}"
+echo "[MD-FINAL1640-DENSITY] pkl=${PKL}"
+
+ARGS=(
+  --dataset_name "${dataset_name}"
+  --fold "${fold}"
+  --pkl_path "${PKL}"
+  --results_root "${RESULTS_ROOT}"
+  --main_task "${main_task}"
+  --task_type reg
+  --num_tasks 1
+  --label_index "${label_index}"
+  --epochs 100
+  --batch_size "${BSZ}"
+  --lr 1e-4
+  --weight_decay 1e-4
+  --dropout 0.1
+  --amp
+  --seed 42
+  --early_stop_patience 40
+  --early_stop_start_epoch 10
+  --wo_triopm
+  --chain_only_repr "${chain_only_repr}"
+  --log10_labels D
+  --d_clamp_min 1e-16
+)
+
+if (( no_pretrained == 1 )); then
+  ARGS+=( --no_pretrained )
+fi
+
+if (( finetune_stage1_only == 1 )); then
+  ARGS+=( --finetune_optimizer_stage1_only )
+fi
+
+python -u frpn/pipelines/md_final1640_v2/main.py "${ARGS[@]}"

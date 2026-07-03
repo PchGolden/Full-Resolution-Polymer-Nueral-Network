@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=BCDB_s1coex_5fold
+#SBATCH --partition=gpuA800
+#SBATCH --mem=60G
+#SBATCH --gres=gpu:4
+#SBATCH --time=2-00:00:00
+#SBATCH --ntasks-per-node=8
+#SBATCH --output=sbatch/sbatch_log/BCDB_s1coex_5fold_%A_%a.out
+#SBATCH --error=sbatch/sbatch_log/BCDB_s1coex_5fold_%A_%a.err
+#SBATCH --array=0-39
+
+set -eo pipefail
+
+cd "$SLURM_SUBMIT_DIR"
+source ~/.bashrc
+conda activate unimacro
+cd /share/home/202320162823/cmacro_BCDB
+
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
+PKL_WITH="/share/home/202320162823/cmacro_BCDB/data/processed/BCDB_chain_withvolume.pkl"
+PKL_WO="/share/home/202320162823/cmacro_BCDB/data/processed/BCDB_chain_wovolume.pkl"
+SCRATCH_WT="/share/home/202320162823/cmacro_BCDB/non_exist_for_scratch.pt"
+PRETRAIN_WT="/share/home/202320162823/unimacro/checkpoints/checkpoint_adaptive.pt"
+
+# 2(volume) * 4(stage1 variants) * 5(folds) = 40
+FOLDS=5
+VARIANTS=4
+idx=${SLURM_ARRAY_TASK_ID}
+fold=$(( idx % FOLDS ))
+tmp=$(( idx / FOLDS ))
+variant=$(( tmp % VARIANTS ))
+volume=$(( tmp / VARIANTS ))
+
+if [[ ${volume} -eq 0 ]]; then
+  PKL_PATH="$PKL_WITH"
+  VOL_TAG="withvol"
+else
+  PKL_PATH="$PKL_WO"
+  VOL_TAG="wovol"
+fi
+
+MAIN_TASK="finetune"
+EQUALIZE=0
+WEIGHT_PATH="$SCRATCH_WT"
+VAR_TAG=""
+
+case ${variant} in
+  0) EQUALIZE=0; WEIGHT_PATH="$SCRATCH_WT"; VAR_TAG="stage1only";;
+  1) EQUALIZE=1; WEIGHT_PATH="$SCRATCH_WT"; VAR_TAG="stage1onlybig";;
+  2) EQUALIZE=0; WEIGHT_PATH="$PRETRAIN_WT"; VAR_TAG="stage1only_pt";;
+  3) EQUALIZE=1; WEIGHT_PATH="$PRETRAIN_WT"; VAR_TAG="stage1onlybig_pt";;
+  *) echo "Invalid variant index: ${variant}"; exit 2;;
+esac
+
+PORT=$(( 29700 + SLURM_ARRAY_TASK_ID ))
+
+echo "[S1-COEX] idx=${idx} fold=${fold} volume=${VOL_TAG} variant=${VAR_TAG}"
+echo "[S1-COEX] pkl=${PKL_PATH} weight=${WEIGHT_PATH}"
+
+ARGS=(
+  --main_task "${MAIN_TASK}"
+  --fold "${fold}"
+  --dataset_name BCDB
+  --pkl_path "${PKL_PATH}"
+  --epochs 200
+  --lr 1e-4
+  --weight_decay 1e-2
+  --task_type cls
+  --batch_size 1
+  --num_tasks 2
+  --wo_triopm
+  --amp
+  --seed 4200
+  --weight_path "${WEIGHT_PATH}"
+  --results_root /share/home/202320162823/cmacro_BCDB/results_stage1_coex
+  --distributed
+)
+
+if [[ ${EQUALIZE} -eq 1 ]]; then
+  ARGS+=( --equalize_active_params )
+fi
+
+torchrun --standalone --nproc_per_node=4 --master_port="${PORT}" frpn/pipelines/bcdb/main.py "${ARGS[@]}"

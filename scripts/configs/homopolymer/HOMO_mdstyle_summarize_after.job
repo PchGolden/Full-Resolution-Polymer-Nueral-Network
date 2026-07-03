@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Summarize HOMO md-style runs after the training array completes.
+#
+# Submit (example):
+#   sbatch --dependency=afterok:<TRAIN_JOBID> --export=ALL,JOBID_MAIN=<TRAIN_JOBID> sbatch/HOMO_mdstyle_summarize_after.job
+#
+# Outputs:
+#   paper_results/homopolymer_mdstyle_summary_<JOBID_MAIN>/
+
+#SBATCH --job-name=HOMO_mdstyle_summary
+#SBATCH --partition=cpuXeon6458
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=8G
+#SBATCH --time=00:30:00
+#SBATCH --output=sbatch/sbatch_log/HOMO_MDSTYLE/HOMO_summary_%j.out
+#SBATCH --error=sbatch/sbatch_log/HOMO_MDSTYLE/HOMO_summary_%j.err
+
+set -eo pipefail
+
+cd "$SLURM_SUBMIT_DIR"
+source ~/.bashrc
+conda activate unimacro
+cd /share/home/202320162823/cmacro_BCDB
+
+mkdir -p sbatch/sbatch_log/HOMO_MDSTYLE
+
+JOBID_MAIN="${JOBID_MAIN:-}"
+if [[ -z "${JOBID_MAIN}" ]]; then
+  echo "[ERROR] Missing JOBID_MAIN env var (training array jobid)."
+  exit 2
+fi
+
+OUT_DIR="paper_results/homopolymer_mdstyle_summary_${JOBID_MAIN}"
+mkdir -p "${OUT_DIR}"
+
+python -u frpn/pipelines/bcdb/summarize_homopolymer_from_logs.py \
+  --log_dir sbatch/sbatch_log/HOMO_MDSTYLE \
+  --jobid_main "${JOBID_MAIN}" \
+  --out_dir "${OUT_DIR}"
+
+echo "[OK] wrote summary to ${OUT_DIR}"

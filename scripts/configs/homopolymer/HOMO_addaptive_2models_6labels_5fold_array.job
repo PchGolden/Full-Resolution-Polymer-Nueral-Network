@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Homopolymer additional models:
+# 2 models x 6 labels x 5 folds = 60 tasks (single GPU each), max 20 concurrent.
+#
+# Models:
+#   0 frpn_adaptive_full    -> main_task=chain, weight_path=checkpoint_adaptive.pt
+#   1 frpn_adaptive_freeze  -> main_task=chain, weight_path=checkpoint_adaptive.pt, freeze_encoder
+#
+# Submit:
+#   sbatch sbatch/HOMO_addaptive_2models_6labels_5fold_array.job
+
+#SBATCH --job-name=HOMO_adapt_2x6x5
+#SBATCH --partition=gpuA800
+#SBATCH --mem=48G
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --time=1-12:00:00
+#SBATCH --array=0-59%20
+#SBATCH --output=sbatch/sbatch_log/HOMO/HOMO_adapt_2x6x5_%A_%a.out
+#SBATCH --error=sbatch/sbatch_log/HOMO/HOMO_adapt_2x6x5_%A_%a.err
+
+set -eo pipefail
+
+cd "$SLURM_SUBMIT_DIR"
+source ~/.bashrc
+conda activate unimacro
+cd /share/home/202320162823/cmacro_BCDB
+
+mkdir -p sbatch/sbatch_log/HOMO
+
+ROOT="/share/home/202320162823/cmacro_BCDB"
+PKL_DIR="${ROOT}/data/processed/HOMO_372/homopolymer/main"
+RESULTS_ROOT="${ROOT}/results_homopolymer"
+CKPT_ADAPTIVE="${ROOT}/checkpoints/checkpoint_adaptive.pt"
+
+FOLDS=5
+LABELS=6
+MODELS=2
+TASKS=$(( MODELS * LABELS * FOLDS ))
+
+idx="${SLURM_ARRAY_TASK_ID}"
+if (( idx < 0 || idx >= TASKS )); then
+  echo "Invalid idx=${idx}; expected [0, $((TASKS-1))]"
+  exit 2
+fi
+
+fold=$(( idx % FOLDS ))
+tmp=$(( idx / FOLDS ))
+label_id=$(( tmp % LABELS ))
+model_id=$(( tmp / LABELS ))
+
+LABEL_KEYS=(density rg self_diffusion cp dielectric_const refractive_index)
+LABEL_RAW=(density Rg self-diffusion Cp dielectric_const_dc refractive_index)
+label_key="${LABEL_KEYS[label_id]}"
+label_raw="${LABEL_RAW[label_id]}"
+
+pkl_path="${PKL_DIR}/split_${label_key}.pkl"
+if [[ ! -f "$pkl_path" ]]; then
+  echo "Missing pkl: $pkl_path"
+  exit 3
+fi
+
+main_task="chain"
+model_tag=""
+freeze_encoder=0
+case "${model_id}" in
+  0)
+    model_tag="frpn_adaptive_full"
+    ;;
+  1)
+    model_tag="frpn_adaptive_freeze"
+    freeze_encoder=1
+    ;;
+  *)
+    echo "Invalid model_id=${model_id}"
+    exit 2
+    ;;
+esac
+
+dataset_name="HOMO_372/${model_tag}/label${label_id}_${label_key}"
+
+echo "[HOMO-ADAPT] idx=${idx} fold=${fold} model=${model_tag} label=${label_raw}"
+echo "[HOMO-ADAPT] pkl=${pkl_path} ckpt=${CKPT_ADAPTIVE}"
+
+ARGS=(
+  --dataset_name "${dataset_name}"
+  --main_task "${main_task}"
+  --task_type reg
+  --num_tasks 1
+  --fold "${fold}"
+  --pkl_path "${pkl_path}"
+  --results_root "${RESULTS_ROOT}"
+  --weight_path "${CKPT_ADAPTIVE}"
+  --epochs 100
+  --batch_size 24
+  --lr 1e-4
+  --weight_decay 1e-4
+  --dropout 0.1
+  --amp
+  --seed 42
+  --early_stop_patience 40
+  --wo_triopm
+  --max_chain_tokens 1536
+  --save_finetune_checkpoint
+)
+
+if (( freeze_encoder == 1 )); then
+  ARGS+=( --freeze_encoder )
+fi
+
+python -u frpn/pipelines/bcdb/main.py "${ARGS[@]}"
+

@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Homopolymer regression in BCDB/src pipeline:
+# 3 models x 6 labels x 5 folds = 90 tasks (single GPU each), max 20 concurrent.
+#
+# Models:
+#   0 FRPN         -> main_task=chain
+#   1 stage1_only  -> main_task=finetune
+#   2 stage2_only  -> main_task=stage2_only, stage2_only_repr=smiles_only
+#
+# Prereq:
+#   sbatch sbatch/HOMO_preprocess_5fold_singlelabel_pkls.job
+#
+# Submit:
+#   sbatch sbatch/HOMO_3models_6labels_5fold_array.job
+
+#SBATCH --job-name=HOMO_3x6x5_mdstyle
+#SBATCH --partition=gpuA800
+#SBATCH --mem=48G
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --time=1-12:00:00
+#SBATCH --array=0-89%20
+#SBATCH --output=sbatch/sbatch_log/HOMO_MDSTYLE/HOMO_3x6x5_%A_%a.out
+#SBATCH --error=sbatch/sbatch_log/HOMO_MDSTYLE/HOMO_3x6x5_%A_%a.err
+
+set -eo pipefail
+
+cd "$SLURM_SUBMIT_DIR"
+source ~/.bashrc
+conda activate unimacro
+cd /share/home/202320162823/cmacro_BCDB
+
+mkdir -p sbatch/sbatch_log/HOMO_MDSTYLE
+
+ROOT="/share/home/202320162823/cmacro_BCDB"
+PKL_DIR="${ROOT}/data/processed/HOMO_372/homopolymer/main"
+RESULTS_ROOT="${ROOT}/results_homopolymer_mdstyle"
+
+FOLDS=5
+LABELS=6
+MODELS=3
+TASKS=$(( MODELS * LABELS * FOLDS ))
+
+idx="${SLURM_ARRAY_TASK_ID}"
+if (( idx < 0 || idx >= TASKS )); then
+  echo "Invalid idx=${idx}; expected [0, $((TASKS-1))]"
+  exit 2
+fi
+
+fold=$(( idx % FOLDS ))
+tmp=$(( idx / FOLDS ))
+label_id=$(( tmp % LABELS ))
+model_id=$(( tmp / LABELS ))
+
+LABEL_KEYS=(density rg self_diffusion cp dielectric_const refractive_index)
+LABEL_RAW=(density Rg self-diffusion Cp dielectric_const_dc refractive_index)
+label_key="${LABEL_KEYS[label_id]}"
+label_raw="${LABEL_RAW[label_id]}"
+
+pkl_path="${PKL_DIR}/split_${label_key}.pkl"
+if [[ ! -f "$pkl_path" ]]; then
+  echo "Missing pkl: $pkl_path"
+  exit 3
+fi
+
+main_task=""
+stage2_repr="full"
+model_tag=""
+case "${model_id}" in
+  0)
+    main_task="chain"
+    model_tag="frpn"
+    ;;
+  1)
+    main_task="finetune"
+    model_tag="stage1_only"
+    ;;
+  2)
+    main_task="stage2_only"
+    stage2_repr="smiles_only"
+    model_tag="stage2_only_smiles"
+    ;;
+  *)
+    echo "Invalid model_id=${model_id}"
+    exit 2
+    ;;
+esac
+
+dataset_name="HOMO_372/${model_tag}/label${label_id}_${label_key}"
+
+echo "[HOMO] idx=${idx} fold=${fold} model=${model_tag} label=${label_raw}"
+echo "[HOMO] pkl=${pkl_path}"
+
+python -u frpn/pipelines/bcdb/main.py \
+  --dataset_name "${dataset_name}" \
+  --main_task "${main_task}" \
+  --task_type reg \
+  --num_tasks 1 \
+  --fold "${fold}" \
+  --pkl_path "${pkl_path}" \
+  --results_root "${RESULTS_ROOT}" \
+  --epochs 100 \
+  --batch_size 24 \
+  --lr 1e-4 \
+  --weight_decay 1e-4 \
+  --dropout 0.1 \
+  --amp \
+  --seed 42 \
+  --early_stop_patience 40 \
+  --label_zscore \
+  --log10_labels "self-diffusion" \
+  --log10_clamp_min 1e-16 \
+  --wo_triopm \
+  --max_chain_tokens 1536 \
+  --stage2_only_repr "${stage2_repr}" \
+  --save_finetune_checkpoint

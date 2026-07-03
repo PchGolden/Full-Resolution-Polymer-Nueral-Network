@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=BCDB_mtx_5fold
+#SBATCH --partition=gpuA800
+#SBATCH --mem=60G
+#SBATCH --gres=gpu:4
+#SBATCH --time=2-00:00:00
+#SBATCH --ntasks-per-node=8
+#SBATCH --output=sbatch/sbatch_log/BCDB_mtx_5fold_%A_%a.out
+#SBATCH --error=sbatch/sbatch_log/BCDB_mtx_5fold_%A_%a.err
+#SBATCH --array=0-79
+
+set -eo pipefail
+
+cd "$SLURM_SUBMIT_DIR"
+source ~/.bashrc
+conda activate unimacro
+cd /share/home/202320162823/cmacro_BCDB
+
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
+# -----------------------------
+# Dataset paths (full)
+# -----------------------------
+PKL_WITH="/share/home/202320162823/cmacro_BCDB/data/processed/BCDB_chain_withvolume.pkl"
+PKL_WO="/share/home/202320162823/cmacro_BCDB/data/processed/BCDB_chain_wovolume.pkl"
+
+# -----------------------------
+# Weights
+# - Scratch uses a non-existent path; loader catches FileNotFoundError.
+# - Pretrain path: only stage1-part is actually loaded by load_monomer_pretrained_weights.
+# -----------------------------
+SCRATCH_WT="/share/home/202320162823/cmacro_BCDB/non_exist_for_scratch.pt"
+PRETRAIN_WT="/share/home/202320162823/unimacro/checkpoints/checkpoint_adaptive.pt"
+
+# -----------------------------
+# Experiment grid
+# volume_mode: 2
+# variants: 8
+# folds: 5
+# total: 2*8*5 = 80 array tasks
+# -----------------------------
+FOLDS=5
+VARIANTS=8
+
+idx=${SLURM_ARRAY_TASK_ID}
+fold=$(( idx % FOLDS ))
+tmp=$(( idx / FOLDS ))
+variant=$(( tmp % VARIANTS ))
+volume=$(( tmp / VARIANTS ))
+
+if [[ ${volume} -eq 0 ]]; then
+  PKL_PATH="$PKL_WITH"
+  VOL_TAG="withvol"
+else
+  PKL_PATH="$PKL_WO"
+  VOL_TAG="wovol"
+fi
+
+# Default args (classification)
+EPOCHS=200
+LR=1e-4
+WEIGHT_DECAY=1e-2
+MAX_CHAIN_TOKENS=1536
+BATCH_SIZE=8
+SEED=42
+RESULTS_ROOT="/share/home/202320162823/cmacro_BCDB/results"
+
+MAIN_TASK=""
+EQUALIZE=0
+WEIGHT_PATH="$SCRATCH_WT"
+VAR_TAG=""
+
+case ${variant} in
+  0)
+    # stage1only
+    MAIN_TASK="finetune"; EQUALIZE=0; WEIGHT_PATH="$SCRATCH_WT"; VAR_TAG="stage1only";;
+  1)
+    # stage1onlybig (active-params equalized to FRPN)
+    MAIN_TASK="finetune"; EQUALIZE=1; WEIGHT_PATH="$SCRATCH_WT"; VAR_TAG="stage1onlybig";;
+  2)
+    # stage2only
+    MAIN_TASK="stage2_only"; EQUALIZE=0; WEIGHT_PATH="$SCRATCH_WT"; VAR_TAG="stage2only";;
+  3)
+    # stage2onlybig (active-params equalized to FRPN)
+    MAIN_TASK="stage2_only"; EQUALIZE=1; WEIGHT_PATH="$SCRATCH_WT"; VAR_TAG="stage2onlybig";;
+  4)
+    # FRPN
+    MAIN_TASK="chain"; EQUALIZE=0; WEIGHT_PATH="$SCRATCH_WT"; VAR_TAG="frpn";;
+  5)
+    # stage1only_pretrained (loads stage1 part only)
+    MAIN_TASK="finetune"; EQUALIZE=0; WEIGHT_PATH="$PRETRAIN_WT"; VAR_TAG="stage1only_pt";;
+  6)
+    # stage1onlybig_pretrained
+    MAIN_TASK="finetune"; EQUALIZE=1; WEIGHT_PATH="$PRETRAIN_WT"; VAR_TAG="stage1onlybig_pt";;
+  7)
+    # FRPN_pretrained (loads stage1 part only; chain starts from scratch)
+    MAIN_TASK="chain"; EQUALIZE=0; WEIGHT_PATH="$PRETRAIN_WT"; VAR_TAG="frpn_pt";;
+  *)
+    echo "Invalid variant index: ${variant}"; exit 2;;
+ esac
+
+PORT=$(( 29500 + SLURM_ARRAY_TASK_ID ))
+
+echo "[ARRAY] idx=${idx} fold=${fold} volume=${VOL_TAG} variant=${VAR_TAG} main_task=${MAIN_TASK} eq=${EQUALIZE}"
+echo "[ARRAY] pkl=${PKL_PATH} weight=${WEIGHT_PATH} port=${PORT} bsz=${BATCH_SIZE} max_chain_tokens=${MAX_CHAIN_TOKENS}"
+
+ARGS=(
+  --main_task "${MAIN_TASK}"
+  --fold "${fold}"
+  --dataset_name BCDB
+  --pkl_path "${PKL_PATH}"
+  --epochs "${EPOCHS}"
+  --lr "${LR}"
+  --weight_decay "${WEIGHT_DECAY}"
+  --task_type cls
+  --batch_size "${BATCH_SIZE}"
+  --num_tasks 2
+  --wo_triopm
+  --amp
+  --seed "${SEED}"
+  --max_chain_tokens "${MAX_CHAIN_TOKENS}"
+  --weight_path "${WEIGHT_PATH}"
+  --results_root "${RESULTS_ROOT}"
+  --distributed
+)
+
+if [[ ${EQUALIZE} -eq 1 ]]; then
+  ARGS+=( --equalize_active_params )
+fi
+
+torchrun --standalone --nproc_per_node=4 --master_port="${PORT}" frpn/pipelines/bcdb/main.py "${ARGS[@]}"

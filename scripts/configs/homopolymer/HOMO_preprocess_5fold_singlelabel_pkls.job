@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Homopolymer preprocessing (BCDB/src pipeline) + derive 6 single-label pkls sharing identical 5-fold split.
+#
+# Output root:
+#   data/processed/HOMO_372/
+#     - main/split_alllabels.pkl
+#     - main/split_<label>.pkl   (6 files, single-label each)
+#     - index/split_fold{k}.pkl
+#     - csv/train_fold{k}.csv, val_fold{k}.csv
+#
+# Submit:
+#   sbatch sbatch/HOMO_preprocess_5fold_singlelabel_pkls.job
+
+#SBATCH --job-name=HOMO_preproc
+#SBATCH --partition=cpuXeon6458
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=24G
+#SBATCH --time=02:00:00
+#SBATCH --output=sbatch/sbatch_log/HOMO_MDSTYLE/HOMO_preproc_%j.out
+#SBATCH --error=sbatch/sbatch_log/HOMO_MDSTYLE/HOMO_preproc_%j.err
+
+set -eo pipefail
+
+cd "$SLURM_SUBMIT_DIR"
+source ~/.bashrc
+conda activate unimacro
+cd /share/home/202320162823/cmacro_BCDB
+
+mkdir -p sbatch/sbatch_log/HOMO_MDSTYLE
+
+RAW="data/raw/homopolymer.csv"
+OUTROOT="data/processed/HOMO_372"
+
+LABELS="density,Rg,self-diffusion,Cp,dielectric_const_dc,refractive_index"
+
+python -u frpn/pipelines/bcdb/preprocess/preprocessing_polymer.py \
+  --task finetune \
+  --csv "$RAW" \
+  --labels "$LABELS" \
+  --kfold 5 \
+  --seed 42 \
+  --volume-mode with \
+  --export-splits \
+  --outroot "$OUTROOT"
+
+python - <<'PY'
+import pickle
+from pathlib import Path
+
+root = Path("data/processed/HOMO_372/homopolymer/main")
+src = root / "split.pkl"
+if not src.exists():
+    raise FileNotFoundError(src)
+
+with src.open("rb") as f:
+    header = pickle.load(f)
+
+label_names = header["label_names"]
+samples = header["samples"]
+
+alias = {
+    "density": "density",
+    "Rg": "rg",
+    "self-diffusion": "self_diffusion",
+    "Cp": "cp",
+    "dielectric_const_dc": "dielectric_const",
+    "refractive_index": "refractive_index",
+}
+
+for li, label in enumerate(label_names):
+    out = dict(header)
+    out["label_names"] = [label]
+    new_samples = []
+    for s in samples:
+        ns = dict(s)
+        ns["label"] = {label: s["label"][label]}
+        new_samples.append(ns)
+    out["samples"] = new_samples
+    out_path = root / f"split_{alias.get(label,label)}.pkl"
+    with out_path.open("wb") as f:
+        pickle.dump(out, f, protocol=pickle.HIGHEST_PROTOCOL)
+    print(f"[OK] wrote {out_path} ({len(new_samples)} samples)")
+
+# keep a stable all-label filename too
+all_path = root / "split_alllabels.pkl"
+if src.resolve() != all_path.resolve():
+    all_path.write_bytes(src.read_bytes())
+    print(f"[OK] copied {src} -> {all_path}")
+PY
+
+echo "[DONE] homopolymer preprocess + single-label pkls ready under ${OUTROOT}"
