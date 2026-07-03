@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+title: "FRPN: Full-resolution polymer representation framework for cross-scale interaction learning"
+message: "If you use this code or data package, please cite the associated FRPN manuscript."
+type: software
+authors:
+  - family-names: "TO_BE_FILLED"
+    given-names: "TO_BE_FILLED"
+version: "0.1.0-publication-prep"
+date-released: "2026-06-05"
+url: "URL_TO_BE_FILLED"

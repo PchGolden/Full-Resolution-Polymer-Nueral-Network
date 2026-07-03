@@ -1,0 +1,14 @@
+name: bcdb_src_minimal_cpu
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - pandas
+  - scikit-learn
+  - tqdm
+  - msgpack-python
+  - python-lmdb
+  - rdkit
+  - pytorch-cpu

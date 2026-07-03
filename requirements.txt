@@ -1,0 +1,24 @@
+# Minimal dependencies for cmacro_BCDB/src (BCDB + unimacro main flow)
+# Scope: preprocessing + train/eval/inference in frpn/pipelines/bcdb/main.py and related modules.
+
+# Core numerical / DL
+numpy
+torch
+tqdm
+
+# Metrics used in training/evaluation/export
+scikit-learn
+
+# Data loading stack used by frpn/pipelines/bcdb/dataloader/dataloader_polymer.py
+python-lmdb
+msgpack
+
+# Preprocessing pipeline (frpn/pipelines/bcdb/preprocess/preprocessing_polymer.py)
+pandas
+rdkit
+
+# Notes:
+# - `rdkit` is required for preprocessing and for stage2 fingerprint mode
+#   (`--stage2_only_repr fp_morgan2048`).
+# - If you do NOT run preprocessing and do NOT use fingerprint mode, rdkit/pandas
+#   can be treated as conditional.
