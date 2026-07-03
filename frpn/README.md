@@ -20,4 +20,4 @@ The two pipelines are kept separate because their chain reconstruction, label ha
 
 ## Merge Boundary
 
-BCDB chain graphs are reconstructed from polymer descriptions, SMILES/BigSMILES, degree of polymerization, block fraction and volume features. MD chain graphs are read from explicit dataset fields such as chain node segment IDs and chain edges. These differences are intentionally represented as separate pipelines rather than hidden behind a fragile abstraction.
+BCDB chain graphs are reconstructed from polymer SMILES/BigSMILES and degree of polymerizations. MD chain graphs are read from explicit dataset fields such as chain node segment IDs and chain edges. These differences are intentionally represented as separate pipelines rather than hidden behind a fragile abstraction.
