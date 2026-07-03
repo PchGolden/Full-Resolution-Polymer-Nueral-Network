@@ -12,9 +12,6 @@ This repository is the lightweight GitHub release package. Large trained checkpo
 - `data/raw/`: lightweight raw benchmark CSVs.
 - `data/splits/`: fold/split metadata in CSV form.
 - `data/mini_smoke/`: tiny inputs for environment and parser smoke tests.
-- `results/summaries/`: compact paper-summary tables.
-- `results/figure_source_tables/`: source tables for the MD mechanism figure.
-- `docs/`: figure/table map, checkpoint manifest, code/data availability draft and source-merge notes.
 
 ## Large Assets
 
